@@ -399,198 +399,94 @@ function inputTextareaDirective($mdUtil, $window, $mdAria, $timeout, $mdGesture)
       containerCtrl.setHasValue(element.val().length > 0 || (element[0].validity || {}).badInput);
     }
 
-    function setupTextarea() {
-      var isAutogrowing = !attr.hasOwnProperty('mdNoAutogrow');
+      function setupTextarea() {
+          if(angular.isDefined(element.attr('md-no-autogrow'))) {
+              return;
+          }
 
-      attachResizeHandle();
+          var node = element[0];
+          var container = containerCtrl.element[0];
 
-      if (!isAutogrowing) return;
+          var min_rows = NaN;
+          var lineHeight = null;
+          // can't check if height was or not explicity set,
+          // so rows attribute will take precedence if present
+          if(node.hasAttribute('rows')) {
+              min_rows = parseInt(node.getAttribute('rows'));
+          }
 
-      // Can't check if height was or not explicity set,
-      // so rows attribute will take precedence if present
-      var minRows = attr.hasOwnProperty('rows') ? parseInt(attr.rows) : NaN;
-      var maxRows = attr.hasOwnProperty('maxRows') ? parseInt(attr.maxRows) : NaN;
-      var lineHeight = null;
-      var node = element[0];
+          var onChangeTextarea = $mdUtil.debounce(growTextarea, 1);
 
-      // This timeout is necessary, because the browser needs a little bit
-      // of time to calculate the `clientHeight` and `scrollHeight`.
-      $timeout(function() {
-        $mdUtil.nextTick(growTextarea);
-      }, 10, false);
+          function pipelineListener(value) {
+              onChangeTextarea();
+              return value;
+          }
 
-      // We could leverage ngModel's $parsers here, however it
-      // isn't reliable, because Angular trims the input by default,
-      // which means that growTextarea won't fire when newlines and
-      // spaces are added.
-      element.on('input', growTextarea);
-
-      // We should still use the $formatters, because they fire when
-      // the value was changed from outside the textarea.
-      if (hasNgModel) {
-        ngModelCtrl.$formatters.push(formattersListener);
-      }
-
-      if (!minRows) {
-        element.attr('rows', 1);
-      }
-
-      angular.element($window).on('resize', growTextarea);
-      scope.$on('$destroy', disableAutogrow);
-
-      function growTextarea() {
-        // temporarily disables element's flex so its height 'runs free'
-        element
-          .attr('rows', 1)
-          .css('height', 'auto')
-          .addClass('md-no-flex');
-
-        var height = getHeight();
-
-        if (!lineHeight) {
-          // offsetHeight includes padding which can throw off our value
-          lineHeight = element.css('padding', 0).prop('offsetHeight');
-          element.css('padding', null);
-        }
-
-        if (minRows && lineHeight) {
-          height = Math.max(height, lineHeight * minRows);
-        }
-
-        if (maxRows && lineHeight) {
-          var maxHeight = lineHeight * maxRows;
-
-          if (maxHeight < height) {
-            element.attr('md-no-autogrow', '');
-            height = maxHeight;
+          if (ngModelCtrl) {
+              ngModelCtrl.$formatters.push(pipelineListener);
+              ngModelCtrl.$viewChangeListeners.push(pipelineListener);
           } else {
-            element.removeAttr('md-no-autogrow');
+              onChangeTextarea();
           }
-        }
+          element.on('keydown input', onChangeTextarea);
 
-        if (lineHeight) {
-          element.attr('rows', Math.round(height / lineHeight));
-        }
+          if(isNaN(min_rows)) {
+              element.attr('rows', '1');
 
-        element
-          .css('height', height + 'px')
-          .removeClass('md-no-flex');
-      }
-
-      function getHeight() {
-        var offsetHeight = node.offsetHeight;
-        var line = node.scrollHeight - offsetHeight;
-        return offsetHeight + Math.max(line, 0);
-      }
-
-      function formattersListener(value) {
-        $mdUtil.nextTick(growTextarea);
-        return value;
-      }
-
-      function disableAutogrow() {
-        if (!isAutogrowing) return;
-
-        isAutogrowing = false;
-        angular.element($window).off('resize', growTextarea);
-        element
-          .attr('md-no-autogrow', '')
-          .off('input', growTextarea);
-
-        if (hasNgModel) {
-          var listenerIndex = ngModelCtrl.$formatters.indexOf(formattersListener);
-
-          if (listenerIndex > -1) {
-            ngModelCtrl.$formatters.splice(listenerIndex, 1);
+              element.on('scroll', onScroll);
           }
-        }
+
+          angular.element($window).on('resize', onChangeTextarea);
+
+          scope.$on('$destroy', function() {
+              angular.element($window).off('resize', onChangeTextarea);
+          });
+
+          function growTextarea() {
+              // sets the md-input-container height to avoid jumping around
+              container.style.height = container.offsetHeight + 'px';
+
+              // temporarily disables element's flex so its height 'runs free'
+              element.addClass('md-no-flex');
+
+              if(isNaN(min_rows)) {
+                  node.style.height = "auto";
+                  node.scrollTop = 0;
+                  var height = getHeight();
+                  if (height) node.style.height = height + 'px';
+              } else {
+                  node.setAttribute("rows", 1);
+
+                  if(!lineHeight) {
+                      node.style.minHeight = '0';
+
+                      lineHeight = element.height();
+
+                      node.style.minHeight = null;
+                  }
+
+                  var rows = Math.max(min_rows, Math.round(node.scrollHeight / lineHeight));
+                  node.setAttribute("rows", rows);
+              }
+
+              // reset everything back to normal
+              element.removeClass('md-no-flex');
+              container.style.height = 'auto';
+          }
+
+          function getHeight () {
+              var line = node.scrollHeight - node.offsetHeight;
+              return node.offsetHeight + (line > 0 ? line : 0);
+          }
+
+          function onScroll(e) {
+              node.scrollTop = 0;
+              // for smooth new line adding
+              var line = node.scrollHeight - node.offsetHeight;
+              var height = node.offsetHeight + line;
+              node.style.height = height + 'px';
+          }
       }
-
-      function attachResizeHandle() {
-        if (attr.hasOwnProperty('mdNoResize')) return;
-
-        var handle = angular.element('<div class="md-resize-handle"></div>');
-        var isDragging = false;
-        var dragStart = null;
-        var startHeight = 0;
-        var container = containerCtrl.element;
-        var dragGestureHandler = $mdGesture.register(handle, 'drag', { horizontal: false });
-
-        element.after(handle);
-        handle.on('mousedown', onMouseDown);
-
-        container
-          .on('$md.dragstart', onDragStart)
-          .on('$md.drag', onDrag)
-          .on('$md.dragend', onDragEnd);
-
-        scope.$on('$destroy', function() {
-          handle
-            .off('mousedown', onMouseDown)
-            .remove();
-
-          container
-            .off('$md.dragstart', onDragStart)
-            .off('$md.drag', onDrag)
-            .off('$md.dragend', onDragEnd);
-
-          dragGestureHandler();
-          handle = null;
-          container = null;
-          dragGestureHandler = null;
-        });
-
-        function onMouseDown(ev) {
-          ev.preventDefault();
-          isDragging = true;
-          dragStart = ev.clientY;
-          startHeight = parseFloat(element.css('height')) || element.prop('offsetHeight');
-        }
-
-        function onDragStart(ev) {
-          if (!isDragging) return;
-          ev.preventDefault();
-          disableAutogrow();
-          container.addClass('md-input-resized');
-        }
-
-        function onDrag(ev) {
-          if (!isDragging) return;
-          element.css('height', startHeight + (ev.pointer.y - dragStart) + 'px');
-        }
-
-        function onDragEnd(ev) {
-          if (!isDragging) return;
-          isDragging = false;
-          container.removeClass('md-input-resized');
-        }
-      }
-
-      // Attach a watcher to detect when the textarea gets shown.
-      if (attr.hasOwnProperty('mdDetectHidden')) {
-
-        var handleHiddenChange = function() {
-          var wasHidden = false;
-
-          return function() {
-            var isHidden = node.offsetHeight === 0;
-
-            if (isHidden === false && wasHidden === true) {
-              growTextarea();
-            }
-
-            wasHidden = isHidden;
-          };
-        }();
-
-        // Check every digest cycle whether the visibility of the textarea has changed.
-        // Queue up to run after the digest cycle is complete.
-        scope.$watch(function() {
-          $mdUtil.nextTick(handleHiddenChange, false);
-          return true;
-        });
-      }
-    }
   }
 }
 
